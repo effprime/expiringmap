@@ -9,7 +9,7 @@ package main
 
 import (
     "fmt"
-    "github.com/yourusername/expiringmap"
+    "github.com/effprime/expiringmap"
     "time"
 )
 
