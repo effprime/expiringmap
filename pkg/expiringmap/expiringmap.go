@@ -7,20 +7,23 @@ import (
 )
 
 const (
-	AgeDefault    = 5 * time.Minute
-	LengthDefault = 1000
+	AgeDefault             = 5 * time.Minute
+	LengthDefault          = 1000
+	CleanupIntervalDefault = 60 * time.Minute
 )
 
 type ExpiringMap[T any] struct {
 	lock   sync.Mutex
 	config Settings
 	m      map[string]DatedValue[T]
+	stop   chan struct{}
 }
 
 type Settings struct {
-	Age       time.Duration
-	MaxLength int
-	PanicFull bool
+	Age             time.Duration
+	MaxLength       int
+	PanicFull       bool
+	CleanupInterval time.Duration
 }
 
 func (s *Settings) Default() {
@@ -31,15 +34,22 @@ func (s *Settings) Default() {
 	if s.MaxLength == 0 {
 		s.MaxLength = LengthDefault
 	}
+
+	if s.CleanupInterval == 0 {
+		s.CleanupInterval = CleanupIntervalDefault
+	}
 }
 
 func NewExpiringMap[T any](s Settings) *ExpiringMap[T] {
 	s.Default()
-	m := map[string]DatedValue[T]{}
-	return &ExpiringMap[T]{
+
+	e := &ExpiringMap[T]{
 		config: s,
-		m:      m,
+		m:      map[string]DatedValue[T]{},
+		stop:   make(chan struct{}),
 	}
+	go e.cleanExpiredValues()
+	return e
 }
 
 type DatedValue[T any] struct {
@@ -92,4 +102,27 @@ func (e *ExpiringMap[T]) oldestKey() string {
 		}
 	}
 	return oldestKey
+}
+
+func (e *ExpiringMap[T]) cleanExpiredValues() {
+	ticker := time.NewTicker(e.config.CleanupInterval)
+	for {
+		select {
+		case <-ticker.C:
+			e.lock.Lock()
+			for key, val := range e.m {
+				if time.Now().Sub(val.Timestamp) > e.config.Age {
+					delete(e.m, key)
+				}
+			}
+			e.lock.Unlock()
+		case <-e.stop:
+			ticker.Stop()
+			return
+		}
+	}
+}
+
+func (e *ExpiringMap[T]) StopCleaner() {
+	e.stop <- struct{}{}
 }
